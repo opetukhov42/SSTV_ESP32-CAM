@@ -28,6 +28,12 @@
 
 uint16_t pictureNumber = 0; // Upgraded to uint16_t (0 to 65535)
 
+// Global Camera Orientation Controls
+// cameraHMirror: 1 = Mirror horizontally (Left <-> Right), 0 = Normal
+// cameraVFlip:   1 = Flip vertically (Upside down), 0 = Normal
+int cameraHMirror = 1; 
+int cameraVFlip   = 0;
+
 // 16-level density map (Darkest to Lightest)
 const char ascii_map[] = " .:-=+*#%@MW8&B";
 
@@ -575,6 +581,11 @@ void setup() {
     Serial.printf("Camera - ERR 0x%x - [FAIL]\n", err);
   } else {
     sensor_t * s = esp_camera_sensor_get();
+    
+    // Apply global camera orientation settings natively
+    s->set_hmirror(s, cameraHMirror);
+    s->set_vflip(s, cameraVFlip);
+    
     if (s->id.PID == OV3660_PID) {
       Serial.println("Camera - OV3660 - [OK]");
     } else if (s->id.PID == OV2640_PID) {
