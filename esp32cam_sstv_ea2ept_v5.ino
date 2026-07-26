@@ -480,6 +480,19 @@ void setup() {
   Serial.println("===================================");
   Serial.flush();
 
+  // =========================================================================
+  // ONE-TIME EEPROM INITIALIZATION HELPER
+  // Uncomment the block below, flash the board once to reset the picture 
+  // counter to 0, then comment it back out and re-flash for normal flight.
+  // =========================================================================
+  /*
+  EEPROM.begin(EEPROM_SIZE);
+  uint16_t zeroVal = 0;
+  EEPROM.put(0, zeroVal);
+  EEPROM.commit();
+  Serial.println("[INFO] EEPROM picture counter manually reset to 0.");
+  */
+
   esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
   
   // ONLY release RTC holds if waking up from a deep sleep
