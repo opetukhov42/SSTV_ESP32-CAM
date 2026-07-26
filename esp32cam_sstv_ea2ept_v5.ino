@@ -436,6 +436,11 @@ void setup() {
   rtc_gpio_deinit(GPIO_NUM_14);
   rtc_gpio_deinit(GPIO_NUM_15);
 
+  // Enforce internal pull-down on GPIO 12 so floating voltage doesn't abort deep sleep
+  pinMode(12, INPUT_PULLDOWN);
+  rtc_gpio_pulldown_en(GPIO_NUM_12);
+  rtc_gpio_pullup_dis(GPIO_NUM_12);
+
   ++bootCount;
   print_wakeup_reason();
 
@@ -491,7 +496,7 @@ void setup() {
     config.fb_count = 1;
   }
 
-  esp_err_l err = esp_camera_init(&config);
+  esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
     Serial.printf("Camera - ERR 0x%x - [FAIL]\n", err);
   } else {
@@ -565,6 +570,12 @@ void setup() {
 void loop() {
   doImage();
   
+  Serial.println("[INFO] Cycle complete. Going to deep sleep...");
+  
+  // 0. Ensure deep sleep wakeup triggers are explicitly active before sleeping
+  esp_sleep_enable_timer_wakeup((uint64_t)TIME_TO_SLEEP * uS_TO_S_FACTOR);
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_12, 1);
+
   // 1. Turn off the camera to save battery
   pinMode(32, OUTPUT);
   digitalWrite(32, HIGH); 
@@ -578,4 +589,8 @@ void loop() {
   // 3. Clear serial buffer and trigger true deep sleep
   Serial.flush();
   esp_deep_sleep_start();
+  
+  // Safety fallback: if deep sleep fails for any reason, wait and restart cleanly
+  delay(1000);
+  ESP.restart();
 }
