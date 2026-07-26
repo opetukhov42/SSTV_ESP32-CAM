@@ -43,7 +43,7 @@ void print_wakeup_reason() {
     esp_reset_reason_t reset_reason = esp_reset_reason();
     switch (reset_reason) {
       case ESP_RST_POWERON:   Serial.println("[INFO] Boot Reason: Power-on (Cold Boot)"); break;
-      case ESP_RST_EXT:       Serial.println("[INFO] Boot Reason: Hardware Reset Pin (EN/RST Pressed - Snap Triggered)"); break;
+      case ESP_RST_EXT:       Serial.println("[INFO] Boot Reason: Hardware Reset Pin (EN/RST Pressed)"); break;
       case ESP_RST_SW:        Serial.println("[INFO] Boot Reason: Software Reset"); break;
       case ESP_RST_PANIC:     Serial.println("[INFO] Boot Reason: Hardware Panic / Exception"); break;
       case ESP_RST_INT_WDT:
@@ -54,7 +54,7 @@ void print_wakeup_reason() {
   } else {
     // It is a deep sleep wakeup, let's see which trigger fired.
     switch (wakeup_reason) {
-      case ESP_SLEEP_WAKEUP_EXT0:     Serial.println("[INFO] Wake Reason: External signal (EXT0)"); break;
+      case ESP_SLEEP_WAKEUP_EXT0:     Serial.println("[INFO] Wake Reason: External signal (Snap Now Pushbutton on GPIO 12)"); break;
       case ESP_SLEEP_WAKEUP_EXT1:     Serial.println("[INFO] Wake Reason: External signal using RTC_CNTL"); break;
       case ESP_SLEEP_WAKEUP_TIMER:    Serial.println("[INFO] Wake Reason: Timer (10 Minute Interval)"); break;
       case ESP_SLEEP_WAKEUP_TOUCHPAD: Serial.println("[INFO] Wake Reason: Touchpad"); break;
@@ -82,7 +82,7 @@ volatile uint32_t TFLAG = 0;
 #define FT_SYNC (uint32_t) (FT_1200)
 
 #define MAX_WIDTH 320
-#define MAX_HEIGHT 256
+#define MAX_HEIGHT 240
 
 class SSTV_config_t {
   public:
@@ -483,8 +483,7 @@ void setup() {
     Serial.flush();
     rtc_gpio_deinit(GPIO_NUM_4);
     rtc_gpio_deinit(GPIO_NUM_13);
-    rtc_gpio_deinit(GPIO_NUM_14);
-    rtc_gpio_deinit(GPIO_NUM_15);
+    // REMOVED rtc_gpio_deinit for 14 and 15
     Serial.println("OK");
     Serial.flush();
   } else {
@@ -497,6 +496,8 @@ void setup() {
 
   // Handle standard deep sleep interval
   esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
+  // Re-enable external wakeup on GPIO 12 (HIGH state)
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_12, 1);
   
   delay(500);
 
@@ -540,12 +541,13 @@ void setup() {
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
   
+  // FORCE exact size for Martin M1 (320x240) to prevent buffer skew
+  config.frame_size = FRAMESIZE_QVGA;
+  
   if(psramFound()){
-    config.frame_size = FRAMESIZE_SVGA;
     config.jpeg_quality = 10;
     config.fb_count = 2;
   } else {
-    config.frame_size = FRAMESIZE_CIF;
     config.jpeg_quality = 12;
     config.fb_count = 1;
   }
@@ -628,21 +630,26 @@ void setup() {
 void loop() {
   doImage();
   
-  Serial.println("[INFO] Cycle complete. Going to deep sleep...");
+  Serial.println("\n[INFO] Cycle complete. Going to deep sleep...");
   Serial.flush();
+  
+  // Gracefully close the SD card connection so it releases the bus
+  SD_MMC.end();
   
   // 0. Ensure deep sleep wakeup triggers are explicitly active before sleeping
   esp_sleep_enable_timer_wakeup((uint64_t)TIME_TO_SLEEP * uS_TO_S_FACTOR);
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_12, 1);
 
   // 1. Turn off the camera to save battery
   pinMode(32, OUTPUT);
   digitalWrite(32, HIGH); 
   
-  // 2. Isolate unused/leaky pins
+  // 2. Isolate unused/leaky pins to prevent power drain
   rtc_gpio_isolate(GPIO_NUM_4);  // Flash LED
   rtc_gpio_isolate(GPIO_NUM_13); // Speaker output
-  rtc_gpio_isolate(GPIO_NUM_14); // SD Clock
-  rtc_gpio_isolate(GPIO_NUM_15); // SD Command
+  // NOTE: We DO NOT isolate GPIO 14 (CLK) or 15 (CMD) anymore.
+  // Isolating them causes them to float, which sends false clock 
+  // pulses to the SD card, crashing it and causing Error 0x107 on wake.
 
   // 3. Clear serial buffer and trigger true deep sleep
   Serial.flush();
