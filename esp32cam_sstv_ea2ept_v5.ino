@@ -10,8 +10,8 @@
 #include "driver/rtc_io.h"
 #include "esp_system.h"        // Required for checking HW reset reasons
 
-// define the number of bytes you want to access
-#define EEPROM_SIZE 1
+// define the number of bytes for EEPROM (2 bytes for a 16-bit word / up to 65535)
+#define EEPROM_SIZE 2
 
 #define BELL202_BAUD 1200
 #define F_SAMPLE ((BELL202_BAUD * 32) * 0.93) // ≈ 35712 Hz
@@ -26,7 +26,7 @@
 #define speaker_output 13 // Moved to 13 (freed by 1-bit SD mode)
 #define ptt_pin 33        // Doubles as PTT and onboard red LED (Active LOW)
 
-int pictureNumber = 0;
+uint16_t pictureNumber = 0; // Upgraded to uint16_t (0 to 65535)
 
 // 16-level density map (Darkest to Lightest)
 const char ascii_map[] = " .:-=+*#%@MW8&B";
@@ -376,7 +376,13 @@ void doImage() {
 
   // Handle SD Card writing safely without crashing
   if (SD_MMC.cardType() != CARD_NONE) {
-    pictureNumber = EEPROM.read(0) + 1;
+    // Read the 16-bit word from EEPROM (address 0) and increment
+    EEPROM.get(0, pictureNumber);
+    if (pictureNumber == 0xFFFF) { // Handle uninitialized EEPROM state (brand new chip)
+      pictureNumber = 0;
+    }
+    pictureNumber++;
+    
     String path = "/picture" + String(pictureNumber) +".jpg";
     fs::FS &fs = SD_MMC; 
 
@@ -385,7 +391,7 @@ void doImage() {
       Serial.println("SD File Write - [FAIL]");
     } else {
       file.write(fb->buf, fb->len); // payload (image), payload length
-      EEPROM.write(0, pictureNumber);
+      EEPROM.put(0, pictureNumber);
       EEPROM.commit();
       Serial.printf("SD File Write (%s) - [OK]\n", path.c_str());
     }
@@ -483,7 +489,6 @@ void setup() {
     Serial.flush();
     rtc_gpio_deinit(GPIO_NUM_4);
     rtc_gpio_deinit(GPIO_NUM_13);
-    // REMOVED rtc_gpio_deinit for 14 and 15
     Serial.println("OK");
     Serial.flush();
   } else {
@@ -647,9 +652,6 @@ void loop() {
   // 2. Isolate unused/leaky pins to prevent power drain
   rtc_gpio_isolate(GPIO_NUM_4);  // Flash LED
   rtc_gpio_isolate(GPIO_NUM_13); // Speaker output
-  // NOTE: We DO NOT isolate GPIO 14 (CLK) or 15 (CMD) anymore.
-  // Isolating them causes them to float, which sends false clock 
-  // pulses to the SD card, crashing it and causing Error 0x107 on wake.
 
   // 3. Clear serial buffer and trigger true deep sleep
   Serial.flush();
