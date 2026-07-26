@@ -8,6 +8,10 @@ This code is heavily optimized for High Altitude Balloon (HAB) capsules and cust
 This project is built upon the fantastic foundational work from the original **SSTV Capsule V2 for High Altitude Balloons** project. 
 * **Original Author/Project:** [Instructables: SSTV Capsule V2 for High Altitude Balloons](https://www.instructables.com/SSTV-Capsule-V2-for-High-Altitude-Balloons/)
 
+## Sample image
+
+![Sample capture](sample_capture.jpg)
+
 ## ✨ Key Features & Upgrades in this Version
 * **1-Bit SD Card Mode:** Frees up critical pins on the ESP32-CAM for audio and PTT controls.
 * **Non-Blocking SD Fallback:** If the SD card fails to mount or is corrupted mid-flight, the code will skip the local backup and force the SSTV transmission anyway, ensuring you never miss a radio ping.
@@ -25,9 +29,9 @@ To flash this code successfully, you **must** use an older ESP32 core:
 3. Search for `esp32`.
 4. Select and install **Version 2.0.17**.
 
-![ESP32-CAM Pinout](ESP32-CAM%20pinout.webp)
-
 ## 🔌 Pin Mapping and Wiring
+
+![ESP32-CAM Pinout](ESP32-CAM%20pinout.webp)
 
 | Component / Function | ESP32-CAM Pin | Notes |
 | :--- | :--- | :--- |
