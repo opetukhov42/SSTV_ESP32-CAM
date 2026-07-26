@@ -27,6 +27,9 @@ To flash this code successfully, you **must** use an older ESP32 core:
 
 ## 🔌 Pin Mapping and Wiring
 
+### Pinout Reference
+![ESP32-CAM Pinout](ESP32-CAM%20pinout.webp)
+
 | Component / Function | ESP32-CAM Pin | Notes |
 | :--- | :--- | :--- |
 | **Audio PWM Output** | `GPIO 13` | Freed by 1-bit SD mode. Connect to radio MIC input. |
