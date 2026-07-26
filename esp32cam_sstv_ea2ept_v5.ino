@@ -8,6 +8,7 @@
 #include "soc/soc.h"           // Disable brownout problems
 #include "soc/rtc_cntl_reg.h"  // Disable brownout problems
 #include "driver/rtc_io.h"
+#include "esp_system.h"        // Required for checking HW reset reasons
 
 // define the number of bytes you want to access
 #define EEPROM_SIZE 1
@@ -33,16 +34,35 @@ const char ascii_map[] = " .:-=+*#%@MW8&B";
 String overlayTextTop = "PMR";    // Upper left, white
 String overlayTextBottom = "SSTV"; // Lower right, black
 
+// Upgraded Diagnostics: Distinguishes between Sleep Wakes, Power-ons, and HW Resets
 void print_wakeup_reason() {
   esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
-  switch (wakeup_reason) {
-    case ESP_SLEEP_WAKEUP_EXT0: Serial.println("[INFO] Wake Reason: External signal (Snap Now Pushbutton)"); break;
-    case ESP_SLEEP_WAKEUP_EXT1: Serial.println("[INFO] Wake Reason: External signal using RTC_CNTL"); break;
-    case ESP_SLEEP_WAKEUP_TIMER: Serial.println("[INFO] Wake Reason: Timer (10 Minute Interval)"); break;
-    case ESP_SLEEP_WAKEUP_TOUCHPAD: Serial.println("[INFO] Wake Reason: Touchpad"); break;
-    case ESP_SLEEP_WAKEUP_ULP: Serial.println("[INFO] Wake Reason: ULP program"); break;
-    default: Serial.printf("[INFO] Wake Reason: Not caused by deep sleep (Power-on or Reset)\n"); break;
+  
+  if (wakeup_reason == ESP_SLEEP_WAKEUP_UNDEFINED) {
+    // It's not a deep sleep wake. Let's find out what caused the processor to reset.
+    esp_reset_reason_t reset_reason = esp_reset_reason();
+    switch (reset_reason) {
+      case ESP_RST_POWERON:   Serial.println("[INFO] Boot Reason: Power-on (Cold Boot)"); break;
+      case ESP_RST_EXT:       Serial.println("[INFO] Boot Reason: Hardware Reset Pin (EN/RST Pressed - Snap Triggered)"); break;
+      case ESP_RST_SW:        Serial.println("[INFO] Boot Reason: Software Reset"); break;
+      case ESP_RST_PANIC:     Serial.println("[INFO] Boot Reason: Hardware Panic / Exception"); break;
+      case ESP_RST_INT_WDT:
+      case ESP_RST_TASK_WDT:
+      case ESP_RST_WDT:       Serial.println("[INFO] Boot Reason: Watchdog Timer Reset"); break;
+      default:                Serial.printf("[INFO] Boot Reason: Other (%d)\n", reset_reason); break;
+    }
+  } else {
+    // It is a deep sleep wakeup, let's see which trigger fired.
+    switch (wakeup_reason) {
+      case ESP_SLEEP_WAKEUP_EXT0:     Serial.println("[INFO] Wake Reason: External signal (EXT0)"); break;
+      case ESP_SLEEP_WAKEUP_EXT1:     Serial.println("[INFO] Wake Reason: External signal using RTC_CNTL"); break;
+      case ESP_SLEEP_WAKEUP_TIMER:    Serial.println("[INFO] Wake Reason: Timer (10 Minute Interval)"); break;
+      case ESP_SLEEP_WAKEUP_TOUCHPAD: Serial.println("[INFO] Wake Reason: Touchpad"); break;
+      case ESP_SLEEP_WAKEUP_ULP:      Serial.println("[INFO] Wake Reason: ULP program"); break;
+      default:                        Serial.printf("[INFO] Wake Reason: Other Deep Sleep Trigger (%d)\n", wakeup_reason); break;
+    }
   }
+  Serial.flush();
 }
 
 RTC_DATA_ATTR int bootCount = 0;
@@ -344,13 +364,15 @@ void app_printframe(uint8_t * frame, int width, int height) {
 
 void doImage() {
   camera_fb_t *fb = NULL;
+  Serial.println("\n[INFO] Starting image capture process...");
   delay(1000); 
   fb = esp_camera_fb_get();
   delay(1000);
   if (!fb) {
-    Serial.println("Camera Capture - FAILED");
+    Serial.println("Camera Capture - [FAIL]");
     return;
   }
+  Serial.println("Camera Capture - [OK]");
 
   // Handle SD Card writing safely without crashing
   if (SD_MMC.cardType() != CARD_NONE) {
@@ -365,6 +387,7 @@ void doImage() {
       file.write(fb->buf, fb->len); // payload (image), payload length
       EEPROM.write(0, pictureNumber);
       EEPROM.commit();
+      Serial.printf("SD File Write (%s) - [OK]\n", path.c_str());
     }
     file.close();
   }
@@ -377,9 +400,11 @@ void doImage() {
     rgb_buf = (uint8_t *) ps_malloc(rgb_buf_len);
   }
   if (!rgb_buf) {
+    Serial.println("RGB Buffer Allocation - [FAIL]");
     esp_camera_fb_return(fb);
     return;
   }
+  Serial.println("RGB Buffer Allocation - [OK]");
 
   // Calculate CRC32 of the framebuffer
   uint32_t image_crc = esp_crc32_le(0, fb->buf, fb->len);
@@ -390,10 +415,18 @@ void doImage() {
   
   drawText(rgb_buf, rgb_width, rgb_height, overlayTextTop.c_str(), overlayTextBottom.c_str());
 
+  Serial.println("\n[INFO] ASCII Preview:");
+  app_printframe(rgb_buf, rgb_width, rgb_height);
+
   if (currentSSTV) delete currentSSTV;
   currentSSTV = new SSTV_config_t(44);
 
+  Serial.println("\n===================================");
+  Serial.println("[INFO] INITIATING RADIO TRANSMISSION");
+  Serial.println("===================================");
+
   // Activate PTT and Red LED Indicator (LOW = GND)
+  Serial.println("[OK] Activating PTT and Red LED Indicator");
   digitalWrite(ptt_pin, LOW);
   
   // Inline assembly insertion to ensure hardware stabilization before starting output
@@ -403,14 +436,21 @@ void doImage() {
     "nop \n\t"
   );
 
+  Serial.print("[INFO] Sending SSTV Audio ");
   SSTVtime = 0; SSTVnext = 0; SSTVseq = 0; SSTV_RUNNING = true;
   vTaskResume(sampleHandlerHandle);
+  
+  // Print transmission progress dots so you know it hasn't crashed
   while (SSTV_RUNNING) {
+    Serial.print(".");
     delay(1000); 
   }
   vTaskSuspend(sampleHandlerHandle);
+  
+  Serial.println("\n[OK] SSTV Transmission Complete");
 
   // Deactivate PTT and Red LED (HIGH = inactive)
+  Serial.println("[OK] Deactivating PTT and Red LED");
   digitalWrite(ptt_pin, HIGH);
   
   esp_camera_fb_return(fb);
@@ -423,38 +463,51 @@ void doImage() {
 }
 
 void setup() {
+  // Explicitly disable brownout detector before doing ANYTHING else
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+  
   Serial.begin(115200);
   delay(1000);
 
   Serial.println("\n\n===================================");
   Serial.println("[INFO] ESP32-CAM SSTV Capsule Booting");
   Serial.println("===================================");
+  Serial.flush();
 
-  // Release the pins from the RTC subsystem after waking up from deep sleep
-  rtc_gpio_deinit(GPIO_NUM_4);
-  rtc_gpio_deinit(GPIO_NUM_13);
-  rtc_gpio_deinit(GPIO_NUM_14);
-  rtc_gpio_deinit(GPIO_NUM_15);
-
-  // Enforce internal pull-down on GPIO 12 so floating voltage doesn't abort deep sleep
-  pinMode(12, INPUT_PULLDOWN);
-  rtc_gpio_pulldown_en(GPIO_NUM_12);
-  rtc_gpio_pullup_dis(GPIO_NUM_12);
+  esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+  
+  // ONLY release RTC holds if waking up from a deep sleep
+  // If it's a Cold Boot or an external HW reset, the pins are already free
+  if (wakeup_reason != ESP_SLEEP_WAKEUP_UNDEFINED) {
+    Serial.print("[INFO] Releasing RTC holds... ");
+    Serial.flush();
+    rtc_gpio_deinit(GPIO_NUM_4);
+    rtc_gpio_deinit(GPIO_NUM_13);
+    rtc_gpio_deinit(GPIO_NUM_14);
+    rtc_gpio_deinit(GPIO_NUM_15);
+    Serial.println("OK");
+    Serial.flush();
+  } else {
+    Serial.println("[INFO] Cold boot or HW Reset detected. Skipping RTC pin release.");
+    Serial.flush();
+  }
 
   ++bootCount;
   print_wakeup_reason();
 
   // Handle standard deep sleep interval
   esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
-  // Enable external wakeup on GPIO 12 (HIGH state)
-  esp_sleep_enable_ext0_wakeup(GPIO_NUM_12, 1);
   
   delay(500);
 
+  Serial.print("[INFO] Powering up camera hardware regulators... ");
+  Serial.flush();
   // Power up camera hardware regulators
   pinMode(32, OUTPUT);
   digitalWrite(32, LOW);
   delay(250); // Give the voltage regulators 250ms to stabilize
+  Serial.println("OK");
+  Serial.flush();
 
   // 1. PSRAM Initialization Check
   if (psramFound()) {
@@ -462,6 +515,7 @@ void setup() {
   } else {
     Serial.println("PSRAM - NONE - [FAIL]");
   }
+  Serial.flush();
 
   // 2. Camera Initialization Check
   camera_config_t config;
@@ -509,6 +563,7 @@ void setup() {
       Serial.printf("Camera - PID:0x%x - [OK]\n", s->id.PID);
     }
   }
+  Serial.flush();
 
   rtc_gpio_hold_dis(GPIO_NUM_4);
   
@@ -532,6 +587,7 @@ void setup() {
       Serial.printf("SD_CARD - %s %lluMB - [OK]\n", cardTypeStr.c_str(), cardSize);
     }
   }
+  Serial.flush();
 
   EEPROM.begin(EEPROM_SIZE);
   
@@ -546,15 +602,17 @@ void setup() {
   timerAlarmWrite(timer, 8000000 / F_SAMPLE, true);
   timerAlarmEnable(timer);
 
-  // Core 2.x Original LEDC implementation
-  ledc_timer_config_t ledc_timer;
+  // ZERO-INITIALIZE the LEDC struct and explicitly set the automatic clock source
+  ledc_timer_config_t ledc_timer = {};
   ledc_timer.speed_mode = LEDC_HIGH_SPEED_MODE;
   ledc_timer.duty_resolution = LEDC_TIMER_8_BIT;
   ledc_timer.timer_num = LEDC_TIMER_1;
   ledc_timer.freq_hz = 200000;
+  ledc_timer.clk_cfg = LEDC_AUTO_CLK; 
   ledc_timer_config(&ledc_timer);
 
-  ledc_channel_config_t ledc_channel;
+  // ZERO-INITIALIZE the Channel struct
+  ledc_channel_config_t ledc_channel = {};
   ledc_channel.channel = LEDC_CHANNEL_3;
   ledc_channel.gpio_num = speaker_output;
   ledc_channel.speed_mode = LEDC_HIGH_SPEED_MODE;
@@ -571,16 +629,16 @@ void loop() {
   doImage();
   
   Serial.println("[INFO] Cycle complete. Going to deep sleep...");
+  Serial.flush();
   
   // 0. Ensure deep sleep wakeup triggers are explicitly active before sleeping
   esp_sleep_enable_timer_wakeup((uint64_t)TIME_TO_SLEEP * uS_TO_S_FACTOR);
-  esp_sleep_enable_ext0_wakeup(GPIO_NUM_12, 1);
 
   // 1. Turn off the camera to save battery
   pinMode(32, OUTPUT);
   digitalWrite(32, HIGH); 
   
-  // 2. Isolate unused/leaky pins (Skipping GPIO 12 so the wakeup button still functions)
+  // 2. Isolate unused/leaky pins
   rtc_gpio_isolate(GPIO_NUM_4);  // Flash LED
   rtc_gpio_isolate(GPIO_NUM_13); // Speaker output
   rtc_gpio_isolate(GPIO_NUM_14); // SD Clock
